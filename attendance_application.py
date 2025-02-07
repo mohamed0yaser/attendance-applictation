@@ -7,6 +7,8 @@ import pandas as pd
 import os
 import openpyxl
 from datetime import datetime
+import msoffcrypto
+from io import BytesIO
 
 class AttendanceApp(QWidget):
     def __init__(self):
@@ -41,10 +43,8 @@ class AttendanceApp(QWidget):
         
         self.department_label = QLabel("اختر القسم:")
         self.department_combo = QComboBox()
-        x=[" "]
-        x.append(self.data['القسم'].dropna().unique().tolist())
-        print(x)
-        self.department_combo.addItems(x)
+        
+        self.department_combo.addItems(self.data['القسم'].dropna().unique().tolist())
         self.department_combo.currentTextChanged.connect(self.update_employee_table)
         layout.addWidget(self.department_label)
         layout.addWidget(self.department_combo)
@@ -110,27 +110,24 @@ class AttendanceApp(QWidget):
             self.table.setCellWidget(row, 7, QTextEdit())
             
             self.toggle_leave_options(row, False)
+            self.table.setRowHeight(row, 50)
 
         # Resize columns that do not have custom widgets
-        self.table.resizeColumnsToContents()
+        self.table.setColumnWidth(2,250)
+        self.table.setColumnWidth(5,550)
+        self.table.setColumnWidth(6,400)
+        
         
         # Adjust widths manually for columns with custom widgets (buttons, checkboxes, text editor)
-        self.resize_column_widths()
+        #self.resize_column_widths()
 
     def resize_column_widths(self):
         # Calculate maximum size of custom widgets and adjust column widths accordingly
-        max_button_width = max(self.get_widget_width(self.table.cellWidget(row, 3)) for row in range(self.table.rowCount()))
-        max_absent_button_width = max(self.get_widget_width(self.table.cellWidget(row, 4)) for row in range(self.table.rowCount()))
         max_leave_width = max(self.get_widget_width(self.table.cellWidget(row, 5)) for row in range(self.table.rowCount()))
         max_out_width = max(self.get_widget_width(self.table.cellWidget(row, 6)) for row in range(self.table.rowCount()))
-        max_notes_width = max(self.get_widget_width(self.table.cellWidget(row, 7)) for row in range(self.table.rowCount()))
-        
         # Set column widths based on widget content
-        self.table.setColumnWidth(3, max_button_width + 10)  # Column 3 (Present button)
-        self.table.setColumnWidth(4, max_absent_button_width + 10)  # Column 4 (Absent button)
-        self.table.setColumnWidth(5, max_leave_width + 20)  # Column 5 (Leave checkboxes)
-        self.table.setColumnWidth(6, max_out_width + 20)  # Column 6 (External commitments checkboxes)
-        self.table.setColumnWidth(7, max_notes_width + 30)  # Column 7 (Notes editor)
+        self.table.setColumnWidth(5, max_leave_width + 80)  # Column 5 (Leave checkboxes)
+        self.table.setColumnWidth(6, max_out_width + 80)  # Column 6 (External commitments checkboxes)
 
     def get_widget_width(self, widget):
         # Calculate the maximum width of a widget (e.g., button or checkbox)
@@ -156,11 +153,15 @@ class AttendanceApp(QWidget):
         self.table.cellWidget(row, 5).setVisible(show)
         self.table.cellWidget(row, 6).setVisible(show)
 
-
     def save_attendance(self):
         selected_department = self.department_combo.currentText()
         current_date = QDate.currentDate().toString('yyyy-MM-dd')
         attendance_record = []
+        current_time = QTime.currentTime()
+        ent_time  = QTime(12,0,0)
+        if current_time > ent_time:
+            QMessageBox.warning(self, "تحذير", "تم تجاوز الوقت المسموح بتسجيل الحضور!")
+            return
 
         for row in range(self.table.rowCount()):
             emp_name = self.table.item(row, 2).text()
@@ -181,6 +182,17 @@ class AttendanceApp(QWidget):
                 casual_balance = officers_data.at[emp_index, "رصيد عارضة"]
                 annual_balance = officers_data.at[emp_index, "رصيد سنوية"]
                 
+                # Prevent saving if casual balance is zero but leave is selected
+                for leave in leave_types:
+                    if leave == "عارضة" and casual_balance <= 0:
+                        QMessageBox.warning(self, "رصيد غير كافٍ", f"لا يمكن تسجيل إجازة عارضة لـ {emp_name} لأن رصيده صفر!")
+                        return  # Stop saving
+                    elif leave == "طارئة" and casual_balance < 2:
+                        QMessageBox.warning(self, "رصيد غير كافٍ", f"لا يمكن تسجيل إجازة طارئة لـ {emp_name} لأن رصيد العارضة أقل من 2!")
+                        return  # Stop saving
+                    elif leave == "سنوية" and annual_balance <= 0:
+                        QMessageBox.warning(self, "رصيد غير كافٍ", f"لا يمكن تسجيل إجازة سنوية لـ {emp_name} لأن رصيده صفر!")
+                        return  # Stop saving
                 for leave in leave_types:
                     if leave == "عارضة" and casual_balance > 0:
                         casual_balance -= 1
@@ -188,6 +200,7 @@ class AttendanceApp(QWidget):
                         casual_balance -= 2  # Emergency leave counts as 2 casual leaves
                     elif leave == "سنوية" and annual_balance > 0:
                         annual_balance -= 1
+
                 
                 # Update the balance in the file
                 officers_data.at[emp_index, "رصيد عارضة"] = max(0, casual_balance)
@@ -205,28 +218,25 @@ class AttendanceApp(QWidget):
 
         # Create the attendance DataFrame
         df = pd.DataFrame(attendance_record, columns=["الضابط", "الحالة", "نوع الإجازة", "الخوارج", "الملاحظات"])
-        sheet_name = f"{selected_department}_{current_date}"
+        sheet_name = f"{selected_department}-{current_date}"
         
-        # Load existing workbook and remove old sheet if exists
-        if os.path.exists(self.filename):
-            wb = openpyxl.load_workbook(self.filename)
-            if sheet_name in wb.sheetnames:
-                # Delete the existing sheet before writing a new one
-                del wb[sheet_name]
-                wb.save(self.filename)
-        
-        # Append new data to the file without overwriting the first sheet
-        with pd.ExcelWriter(self.filename, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+        # Save attendance in the main file
+        with pd.ExcelWriter(self.filename, engine='openpyxl', mode='a', if_sheet_exists="replace") as writer:
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+        fname= sheet_name + ".xlsx"
+        # Save the same attendance sheet in a new backup file
+        with pd.ExcelWriter(fname, engine='openpyxl', mode='w') as writer:
             df.to_excel(writer, sheet_name=sheet_name, index=False)
 
         QMessageBox.information(self, "تم الحفظ", "تم حفظ بيانات الحضور بنجاح!")
+
     def reset_leave_balances(self):
         """إعادة تهيئة رصيد الإجازات لكل الموظفين بعد 6 شهور."""
         current_date = datetime.now()
         employees = self.data['الضابط'].unique()
         # Reset the leave balances for each employee
         for emp in employees:
-            self.leave_balances[emp] = {'عارضة': 7, 'سنوية': 15}  # Reset balances
+            #self.leave_balances[emp] = {'رصيد عارضة': 7, 'رصيد سنوية': 15}  # Reset balances
             
             # Update the DataFrame with the new leave balances
             self.data.loc[self.data['الضابط'] == emp, 'رصيد عارضة'] = 7
