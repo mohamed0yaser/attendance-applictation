@@ -1,5 +1,6 @@
 from PyQt5.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QComboBox, QTableWidget, QTableWidgetItem, QTextEdit, QCheckBox, QHBoxLayout, QMessageBox
+    QApplication, QWidget, QVBoxLayout, QLabel, QPushButton, QComboBox, QTableWidget, 
+    QTableWidgetItem, QTextEdit, QCheckBox, QHBoxLayout, QMessageBox, QInputDialog
 )
 from PyQt5.QtCore import QTimer, QTime, QDate
 import sys
@@ -18,7 +19,7 @@ class AttendanceApp(QWidget):
         self.out_types = ["مؤتمر", "إلتزام", "مأمورية", "مركز"]
         self.load_data()
         self.initUI()
-        self.stu=""
+        self.password="admin123"
     
     def load_data(self):
         if os.path.exists(self.filename):
@@ -60,7 +61,7 @@ class AttendanceApp(QWidget):
 
         # زر إعادة تهيئة الإجازات
         self.reset_leave_button = QPushButton("إعادة تهيئة الإجازات")
-        self.reset_leave_button.clicked.connect(self.reset_leave_balances)
+        self.reset_leave_button.clicked.connect(self.ask_for_password)
         layout.addWidget(self.reset_leave_button)
         
         self.setLayout(layout)
@@ -147,8 +148,7 @@ class AttendanceApp(QWidget):
             # إزالة أي تحديد سابق للإجازات في حالة الحضور
             for cb in self.table.cellWidget(row, 5).findChildren(QCheckBox):
                 cb.setChecked(False)
-
-        
+    
     def toggle_leave_options(self, row, show):
         self.table.cellWidget(row, 5).setVisible(show)
         self.table.cellWidget(row, 6).setVisible(show)
@@ -249,9 +249,14 @@ class AttendanceApp(QWidget):
                 self.data.to_excel(writer, sheet_name="الضباط", index=False)
 
         QMessageBox.information(self, "تم التهيئة", "تمت إعادة تهيئة رصيد الإجازات بنجاح!")
-
-        
-
+    
+    def ask_for_password(self):
+        password, ok = QInputDialog.getText(self, "إدخال كلمة المرور", "الرجاء إدخال كلمة المرور:")
+        if ok and password == self.password:
+            self.reset_leave_balances()
+        else:
+            QMessageBox.warning(self, "خطأ", "كلمة المرور غير صحيحة!")
+    
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     ex = AttendanceApp()
